@@ -19,7 +19,8 @@ export const COLAB_GPU_CODE = `# ===============================================
 !rm -rf /content/nova && git clone https://github.com/knabin-thapab/nova.git /content/nova
 !mkdir -p /content/nova/backend/pipeline/weights
 
-# 2. Download official Real-ESRGAN weights (Photo & Anime)
+# 2. Download official Real-ESRNet & Real-ESRGAN weights (Photo & Anime)
+!wget -q -nc -O /content/nova/backend/pipeline/weights/RealESRNet_x4plus.pth https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.1/RealESRNet_x4plus.pth
 !wget -q -nc -O /content/nova/backend/pipeline/weights/RealESRGAN_x4plus.pth https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth
 !wget -q -nc -O /content/nova/backend/pipeline/weights/RealESRGAN_x4plus_anime_6B.pth https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth
 
