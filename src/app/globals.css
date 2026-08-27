@@ -1,0 +1,238 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-nova: var(--nova);
+  --color-nova-foreground: var(--nova-foreground);
+  --color-nova-muted: var(--nova-muted);
+  --color-nova-glow: var(--nova-glow);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* ─── NOVA Dark Theme (forced) ────────────────────── */
+:root {
+  --radius: 0.625rem;
+  --background: oklch(0.11 0.005 280);
+  --foreground: oklch(0.93 0 0);
+  --card: oklch(0.15 0.005 280);
+  --card-foreground: oklch(0.93 0 0);
+  --popover: oklch(0.15 0.005 280);
+  --popover-foreground: oklch(0.93 0 0);
+  --primary: oklch(0.75 0.15 65);
+  --primary-foreground: oklch(0.13 0.02 60);
+  --secondary: oklch(0.18 0.005 280);
+  --secondary-foreground: oklch(0.85 0 0);
+  --muted: oklch(0.2 0.005 280);
+  --muted-foreground: oklch(0.6 0 0);
+  --accent: oklch(0.2 0.008 280);
+  --accent-foreground: oklch(0.93 0 0);
+  --destructive: oklch(0.65 0.22 25);
+  --border: oklch(0.25 0.005 280);
+  --input: oklch(0.2 0.005 280);
+  --ring: oklch(0.75 0.15 65);
+  --chart-1: oklch(0.75 0.15 65);
+  --chart-2: oklch(0.7 0.15 165);
+  --chart-3: oklch(0.65 0.2 280);
+  --chart-4: oklch(0.7 0.15 330);
+  --chart-5: oklch(0.8 0.12 90);
+  --sidebar: oklch(0.13 0.005 280);
+  --sidebar-foreground: oklch(0.93 0 0);
+  --sidebar-primary: oklch(0.75 0.15 65);
+  --sidebar-primary-foreground: oklch(0.13 0.02 60);
+  --sidebar-accent: oklch(0.18 0.005 280);
+  --sidebar-accent-foreground: oklch(0.93 0 0);
+  --sidebar-border: oklch(0.25 0.005 280);
+  --sidebar-ring: oklch(0.75 0.15 65);
+  /* NOVA custom tokens */
+  --nova: oklch(0.75 0.15 65);
+  --nova-foreground: oklch(0.13 0.02 60);
+  --nova-muted: oklch(0.75 0.08 65 / 25%);
+  --nova-glow: oklch(0.75 0.18 65 / 15%);
+  --success: oklch(0.72 0.19 155);
+  --warning: oklch(0.78 0.16 75);
+  --danger: oklch(0.65 0.22 25);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+/* ─── Custom scrollbar ────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: oklch(0.13 0.005 280);
+}
+::-webkit-scrollbar-thumb {
+  background: oklch(0.3 0.01 280);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.4 0.01 280);
+}
+
+/* ─── NOVA utility classes ────────────────────────── */
+.nova-glass {
+  background: oklch(0.15 0.005 280 / 70%);
+  backdrop-filter: blur(12px);
+  border: 1px solid oklch(0.3 0.005 280 / 50%);
+}
+
+.nova-glow {
+  box-shadow: 0 0 20px oklch(0.75 0.15 65 / 15%), 0 0 60px oklch(0.75 0.15 65 / 5%);
+}
+
+.nova-glow-sm {
+  box-shadow: 0 0 10px oklch(0.75 0.15 65 / 10%);
+}
+
+.nova-text-glow {
+  text-shadow: 0 0 20px oklch(0.75 0.15 65 / 40%);
+}
+
+.nova-border-gradient {
+  border-image: linear-gradient(135deg, oklch(0.75 0.15 65 / 40%), transparent 50%, oklch(0.7 0.15 165 / 20%)) 1;
+}
+
+.nova-bg-pattern {
+  background-image:
+    radial-gradient(ellipse at 20% 50%, oklch(0.75 0.15 65 / 3%) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, oklch(0.7 0.15 165 / 2%) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 100%, oklch(0.65 0.2 280 / 2%) 0%, transparent 50%);
+}
+
+.nova-grid-bg {
+  background-image:
+    linear-gradient(oklch(0.25 0.005 280 / 30%) 1px, transparent 1px),
+    linear-gradient(90deg, oklch(0.25 0.005 280 / 30%) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* ─── Pipeline connector lines ────────────────────── */
+.pipeline-connector {
+  position: relative;
+}
+.pipeline-connector::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -16px;
+  width: 2px;
+  height: 16px;
+  background: linear-gradient(to bottom, oklch(0.75 0.15 65 / 60%), oklch(0.75 0.15 65 / 20%));
+}
+
+.pipeline-connector:last-child::after {
+  display: none;
+}
+
+/* ─── Severity badges ─────────────────────────────── */
+.severity-none { color: oklch(0.5 0 0); }
+.severity-low { color: oklch(0.72 0.19 155); }
+.severity-medium { color: oklch(0.78 0.16 75); }
+.severity-high { color: oklch(0.75 0.15 65); }
+.severity-critical { color: oklch(0.65 0.22 25); }
+
+/* ─── Animations ──────────────────────────────────── */
+@keyframes nova-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+@keyframes nova-scan {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+
+@keyframes nova-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.nova-shimmer {
+  background: linear-gradient(90deg, transparent 25%, oklch(0.75 0.15 65 / 8%) 50%, transparent 75%);
+  background-size: 200% 100%;
+  animation: nova-shimmer 2s ease-in-out infinite;
+}
+
+@keyframes nova-fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.nova-fade-in {
+  animation: nova-fade-in-up 0.4s ease-out forwards;
+}
+
+/* ─── Before/After slider ─────────────────────────── */
+.comparison-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  cursor: col-resize;
+}
+.comparison-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 4px;
+  height: 100%;
+  background: oklch(0.75 0.15 65);
+  cursor: col-resize;
+  box-shadow: 0 0 10px oklch(0.75 0.15 65 / 50%);
+}

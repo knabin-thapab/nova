@@ -1,0 +1,25 @@
+User-agent: *
+Allow: /
+Allow: /photo-enhancer
+Allow: /video-restoration
+Allow: /image-upscaler
+Allow: /video-upscaler
+Allow: /ai-photo-enhancer
+Allow: /ai-video-enhancer
+Allow: /tools
+Allow: /guides
+Allow: /guides/*
+Allow: /docs/self-hosted
+Allow: /faq
+Allow: /about
+Allow: /privacy
+Allow: /terms
+Allow: /contact
+
+Disallow: /api/
+Disallow: /ws/
+Disallow: /storage/
+Disallow: /storage/uploads/
+Disallow: /storage/jobs/
+
+Sitemap: https://novahoni.vercel.app/sitemap.xml
