@@ -670,7 +670,7 @@ export const ImageEnhancer: React.FC = () => {
                 <div className="p-4 rounded-2xl bg-surface-elevated/70 border border-white/10 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
                   <div className="p-2.5 rounded-xl bg-surface/50 border border-white/5">
                     <div className="text-[10px] text-slate-400 font-sans">Pipeline</div>
-                    <div className="text-slate-100 font-bold">Real-ESRGAN {scale}×</div>
+                    <div className="text-slate-100 font-bold">Restoration + {scale}× AI</div>
                   </div>
                   <div className="p-2.5 rounded-xl bg-surface/50 border border-white/5">
                     <div className="text-[10px] text-slate-400 font-sans">Face Restoration</div>

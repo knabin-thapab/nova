@@ -6,7 +6,7 @@ import uuid
 import cv2
 import numpy as np
 import torch
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple, List
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, Response
@@ -171,11 +171,29 @@ def get_face_engine(strength_mode: str = "balanced") -> FaceRestorationEngine:
     return _face_engine
 
 
-# Core AI photo enhancement execution wrapper (ZeroGPU accelerated)
+from pipeline.photo_restorer import photo_restorer
+
+# Core AI photo restoration execution wrapper (ZeroGPU accelerated)
 @zerogpu_inference(duration=60)
+def _run_photo_restoration(
+    img: np.ndarray,
+    scale: int,
+    mode: str,
+    face_restoration: bool = False,
+    face_strength: str = "conservative"
+) -> Tuple[np.ndarray, Dict[str, Any]]:
+    return photo_restorer.restore_photo(
+        image_bgr=img,
+        scale=scale,
+        mode=mode,
+        face_restoration=face_restoration,
+        face_strength=face_strength
+    )
+
+
 def _run_photo_enhancement(img: np.ndarray, mode: str, scale: int) -> np.ndarray:
-    engine = get_sr_engine(mode=mode, scale=scale)
-    return engine.enhance_image(img)
+    res, _ = _run_photo_restoration(img, scale=scale, mode=mode)
+    return res
 
 
 # ---------------------------------------------------------------------------
@@ -301,6 +319,68 @@ def get_telemetry():
     return SystemTelemetry.get_hardware_telemetry()
 
 
+@app.get("/api/benchmark/gpu")
+@app.get("/api/v1/benchmark/gpu")
+def gpu_benchmark(frames: int = 10, width: int = 320, height: int = 240):
+    """
+    Runs a genuine N-frame GPU inference benchmark and reports truthful performance metrics.
+    Uses real model weights on the actual device to measure authentic throughput.
+    """
+    import time as _time
+
+    # GPU diagnostics
+    gpu_info = SystemTelemetry.get_gpu_benchmark_info()
+
+    # Run real inference benchmark
+    engine = get_sr_engine(mode="balanced", scale=4)
+    device_info = engine.get_device_info()
+
+    # Generate N random test frames
+    test_frames = [np.random.randint(0, 255, (height, width, 3), dtype=np.uint8) for _ in range(frames)]
+
+    # Warmup
+    engine.warmup()
+
+    # Benchmark single-frame
+    t0 = _time.perf_counter()
+    for f in test_frames:
+        _ = engine.enhance_image(f)
+    single_elapsed = _time.perf_counter() - t0
+    single_fps = round(frames / max(single_elapsed, 0.001), 2)
+
+    # Benchmark batched
+    t1 = _time.perf_counter()
+    _ = engine.enhance_batch(test_frames)
+    batch_elapsed = _time.perf_counter() - t1
+    batch_fps = round(frames / max(batch_elapsed, 0.001), 2)
+
+    # VRAM after benchmark
+    vram_after = None
+    if torch.cuda.is_available():
+        vram_after = round(torch.cuda.memory_allocated(0) / (1024**3), 2)
+        torch.cuda.empty_cache()
+
+    return {
+        "gpu": gpu_info,
+        "model_device": device_info,
+        "benchmark": {
+            "frames": frames,
+            "input_resolution": f"{width}x{height}",
+            "output_resolution": f"{width*4}x{height*4}",
+            "single_frame": {
+                "total_sec": round(single_elapsed, 3),
+                "fps": single_fps,
+            },
+            "batched": {
+                "total_sec": round(batch_elapsed, 3),
+                "fps": batch_fps,
+            },
+            "vram_after_gb": vram_after,
+            "speedup": round(batch_fps / max(single_fps, 0.01), 2) if single_fps > 0 else None,
+        }
+    }
+
+
 # ---------------------------------------------------------------------------
 # Authentic Media Analysis Routes (No fake/random numbers)
 # ---------------------------------------------------------------------------
@@ -396,14 +476,15 @@ async def enhance_image(
         # Gentle color format verification
         img = img.astype(np.uint8)
 
-        # Acquire concurrency semaphore and run AI inference
+        # Acquire concurrency semaphore and run AI restoration
         async with _gpu_semaphore:
-            enhanced = _run_photo_enhancement(img, mode=mode, scale=effective_scale)
-
-        # Apply Neural Face Restoration if requested or portrait mode
-        if face_restoration or mode == "portrait":
-            face_engine = get_face_engine(strength_mode=face_strength)
-            enhanced, _ = face_engine.process(enhanced)
+            enhanced, restore_report = _run_photo_restoration(
+                img,
+                scale=effective_scale,
+                mode=mode,
+                face_restoration=face_restoration,
+                face_strength=face_strength
+            )
 
         eh, ew = enhanced.shape[:2]
 

@@ -1,6 +1,22 @@
 import cv2
 import numpy as np
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
+
+
+# Module-level meshgrid cache to avoid reallocation per frame
+_MESHGRID_CACHE: Dict[Tuple[int, int], Tuple[np.ndarray, np.ndarray]] = {}
+
+
+def _get_meshgrid(w: int, h: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Returns cached (flow_map_x, flow_map_y) float32 meshgrids for the given resolution."""
+    key = (w, h)
+    if key not in _MESHGRID_CACHE:
+        flow_map_x, flow_map_y = np.meshgrid(
+            np.arange(w, dtype=np.float32),
+            np.arange(h, dtype=np.float32)
+        )
+        _MESHGRID_CACHE[key] = (flow_map_x, flow_map_y)
+    return _MESHGRID_CACHE[key]
 
 
 class TemporalConsistencyManager:
@@ -12,6 +28,7 @@ class TemporalConsistencyManager:
       - Motion-compensated optical flow alignment
       - Dynamic confidence weighting (distinguishing static background, camera pan, and rapid motion)
       - Elimination of high-frequency flicker and popping textures
+      - Cached meshgrid arrays to eliminate per-frame allocation overhead
     """
     def __init__(self, window_size: int = 5, temporal_strength: float = 0.6, scene_cut_threshold: float = 0.45):
         self.window_size = window_size
@@ -54,6 +71,7 @@ class TemporalConsistencyManager:
         """
         Applies scene-aware motion-compensated temporal consistency.
         Resets temporal buffer immediately when a scene cut is detected.
+        Uses cached meshgrid arrays to avoid per-frame allocation overhead.
         """
         if current_restored is None:
             return current_restored
@@ -91,9 +109,10 @@ class TemporalConsistencyManager:
             flow_full[..., 1] *= scale_y
 
             # 4. Warp previous restored frame toward current frame
-            flow_map_x, flow_map_y = np.meshgrid(np.arange(w), np.arange(h))
-            map_x = (flow_map_x + flow_full[..., 0]).astype(np.float32)
-            map_y = (flow_map_y + flow_full[..., 1]).astype(np.float32)
+            # Use cached meshgrid arrays instead of allocating new ones per frame
+            base_map_x, base_map_y = _get_meshgrid(w, h)
+            map_x = base_map_x + flow_full[..., 0]
+            map_y = base_map_y + flow_full[..., 1]
 
             warped_prev = cv2.remap(
                 self.prev_restored_frame,

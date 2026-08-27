@@ -96,10 +96,17 @@ export const LiveProgress: React.FC<LiveProgressProps> = ({ job, telemetry, onCa
             <span>Compute Telemetry</span>
           </div>
           <div className="font-mono text-sm font-bold text-slate-100">
-            {telemetry?.cpuPercent || 0}% CPU
+            {telemetry?.gpu?.available ? (
+              <span className="text-emerald-400">{telemetry.gpu.name || 'GPU Active'}</span>
+            ) : (
+              <span className="text-amber-400">CPU Fallback</span>
+            )}
           </div>
-          <div className="text-[10px] text-slate-400 font-mono">
-            RAM: {telemetry?.ramUsedGB || 0} GB ({telemetry?.ramPercent || 0}%)
+          <div className="text-[10px] text-slate-400 font-mono space-y-0.5">
+            <div>CPU: {telemetry?.cpuPercent || 0}% | RAM: {telemetry?.ramUsedGB || 0} GB</div>
+            {telemetry?.gpu?.vramUsedGB != null && (
+              <div>VRAM: {telemetry.gpu.vramUsedGB} / {telemetry.gpu.vramTotalGB} GB</div>
+            )}
           </div>
         </div>
 

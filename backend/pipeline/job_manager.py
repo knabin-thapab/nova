@@ -1,14 +1,18 @@
 import os
+import sys
 import time
 import uuid
 import asyncio
+import threading
+import queue
 import cv2
 import base64
 import torch
+import numpy as np
 from typing import Dict, Any, Optional, Callable, List
 from .media_probe import probe_video
 from .decoder import VideoDecoder
-from .vsr_engine import TemporalVSREngine
+from .vsr_engine import TemporalVSREngine, get_cached_vsr_engine
 from .face_restore import FaceRestorationEngine
 from .encoder import VideoEncoder
 from .validator import VideoValidator
@@ -33,6 +37,13 @@ class RestorationJobManager:
     """
     Asynchronous Job Manager and Processing Pipeline Coordinator.
     Enforces real state transitions, genuine progress calculation, and responsive cancellation.
+    
+    Architecture:
+      - Threaded producer-consumer pipeline separating decode, inference, and encode
+      - Batched GPU inference with adaptive batch sizing
+      - Rolling FPS estimation for accurate ETA
+      - Aspect-ratio-preserving resolution scaling
+      
     ZeroGPU and self-hosted server compatible.
     """
     def __init__(self, storage_dir: str):
@@ -54,18 +65,22 @@ class RestorationJobManager:
         # Initial metadata probe
         source_meta = probe_video(source_path)
 
-        # Smart resolution target policy (never produce uncontrolled 8K by default)
+        # Smart resolution target policy — PRESERVES ASPECT RATIO
         scale = int(config.get("scale", 2 if source_meta["height"] >= 720 else 4))
-        target_w = source_meta["width"] * scale
-        target_h = source_meta["height"] * scale
+        src_w = source_meta["width"]
+        src_h = source_meta["height"]
+        target_w = src_w * scale
+        target_h = src_h * scale
 
-        # Enforce max resolution cap (max 2560x1440 or 3840x2160 for video)
+        # Enforce max resolution cap while preserving aspect ratio
         max_vid_dim = int(config.get("maxVideoDim", 2560))
         if max(target_w, target_h) > max_vid_dim:
+            # Scale down proportionally to fit within max dimension
             ratio = max_vid_dim / max(target_w, target_h)
             target_w = int(round(target_w * ratio / 2.0)) * 2
             target_h = int(round(target_h * ratio / 2.0)) * 2
 
+        # Allow explicit custom resolution override (user choice)
         if "targetResolution" in config and config["targetResolution"]:
             custom_w = config["targetResolution"].get("width")
             custom_h = config["targetResolution"].get("height")
@@ -117,7 +132,8 @@ class RestorationJobManager:
             "liveFramePreview": None,
             "detectedFaces": 0,
             "error": None,
-            "createdAt": time.time()
+            "createdAt": time.time(),
+            "gpuDevice": "detecting...",
         }
         return job_id
 
@@ -152,7 +168,8 @@ class RestorationJobManager:
     async def run_job(self, job_id: str):
         """
         Executes the genuine end-to-end AI video restoration pipeline.
-        Runs CPU/GPU processing in worker loop with dynamic ZeroGPU support.
+        Uses batched GPU inference with threaded producer-consumer architecture
+        to separate decode, inference, and encode stages for maximum throughput.
         """
         job = self.active_jobs.get(job_id)
         if not job:
@@ -171,18 +188,30 @@ class RestorationJobManager:
             self._notify(job_id)
             await asyncio.sleep(0.05)
 
-            # Initialize restoration engines
+            # Initialize restoration engines — REUSE CACHED MODELS
             content_type = config.get("contentType", "photo")
-            vsr_engine = TemporalVSREngine(
+            mode = config.get("mode", "balanced")
+
+            vsr_engine = get_cached_vsr_engine(
                 scale=target["scale"],
                 content_type=content_type,
-                mode=config.get("mode", "balanced"),
+                mode=mode,
                 denoise=float(config.get("denoise", 0.3)),
                 deblur=float(config.get("deblur", 0.3)),
                 artifact_removal=float(config.get("artifactRemoval", 0.3)),
                 detail_recovery=float(config.get("detailRecovery", 0.5)),
                 temporal_consistency=bool(config.get("temporalConsistency", True))
             )
+
+            # Report truthful GPU device placement
+            device_info = vsr_engine.sr_engine.get_device_info()
+            device_str = device_info.get("model_device", "cpu")
+            gpu_name = device_info.get("gpu_name", "CPU")
+            job["gpuDevice"] = f"{gpu_name} ({device_str})" if device_info.get("cuda_available") else f"CPU fallback"
+
+            if not device_info.get("cuda_available"):
+                print(f"[GPU] WARNING: CUDA unavailable for job {job_id} — running CPU fallback. "
+                      f"Performance will be significantly slower.", file=sys.stderr, flush=True)
 
             face_enabled = bool(config.get("faceRestoration", False))
             if content_type in ["anime", "anime_text", "text", "cartoon"] and "faceRestoration" not in config:
@@ -213,68 +242,201 @@ class RestorationJobManager:
             total_frames = max(decoder.total_frames, 1)
             job["totalFrames"] = total_frames
 
+            # Determine adaptive batch size
+            src_h = source_meta.get("height", 360)
+            src_w = source_meta.get("width", 640)
+            batch_size = vsr_engine.get_adaptive_batch_size(src_h, src_w)
+            print(f"[Pipeline] Job {job_id}: {total_frames} frames, "
+                  f"batch_size={batch_size}, device={device_str}, "
+                  f"input={src_w}x{src_h} -> output={target['width']}x{target['height']}",
+                  file=sys.stderr, flush=True)
+
+            # --- Producer-Consumer Pipeline with Batched Inference ---
+            # We use a frame queue between decoder and inference,
+            # and an output queue between inference and encoder.
+            DECODE_QUEUE_SIZE = max(batch_size * 3, 16)
+            ENCODE_QUEUE_SIZE = max(batch_size * 2, 8)
+            
+            decode_queue: queue.Queue = queue.Queue(maxsize=DECODE_QUEUE_SIZE)
+            encode_queue: queue.Queue = queue.Queue(maxsize=ENCODE_QUEUE_SIZE)
+            decode_done = threading.Event()
+            inference_done = threading.Event()
+            error_flag = {"error": None}
+
+            # --- Decoder Thread ---
+            def _decoder_thread():
+                try:
+                    for frame_idx, timestamp, frame in decoder.stream_frames():
+                        if self.cancel_flags.get(job_id, False):
+                            break
+                        decode_queue.put((frame_idx, frame), timeout=30)
+                except Exception as e:
+                    error_flag["error"] = e
+                finally:
+                    decode_done.set()
+
+            # --- Encoder Thread ---
+            def _encoder_thread():
+                try:
+                    while True:
+                        try:
+                            item = encode_queue.get(timeout=2.0)
+                        except queue.Empty:
+                            if inference_done.is_set():
+                                break
+                            continue
+                        if item is None:  # sentinel
+                            break
+                        encoder.write_frame(item)
+                        encode_queue.task_done()
+                except Exception as e:
+                    error_flag["error"] = e
+
+            # Start background threads
+            decoder_t = threading.Thread(target=_decoder_thread, daemon=True)
+            encoder_t = threading.Thread(target=_encoder_thread, daemon=True)
+            decoder_t.start()
+            encoder_t.start()
+
+            # --- Main Inference Loop (batched) ---
             start_time = time.time()
-            frame_buffer: List[np.ndarray] = []
             processed_count = 0
             total_faces_detected = 0
+            frame_buffer: List[np.ndarray] = []  # temporal neighbor buffer
 
-            # Frame processing loop
-            for frame_idx, timestamp, frame in decoder.stream_frames():
+            # Rolling FPS estimation (window of recent frames)
+            _rolling_window_size = 30
+            _rolling_timestamps: List[float] = []
+
+            batch_frames: List[np.ndarray] = []
+            batch_indices: List[int] = []
+            last_notify_time = time.time()
+
+            while True:
                 if self.cancel_flags.get(job_id, False):
-                    decoder.close()
-                    encoder.finalize()
-                    if os.path.exists(output_path):
-                        try:
-                            os.remove(output_path)
-                        except Exception:
-                            pass
-                    return
+                    break
 
-                frame_buffer.append(frame)
-                if len(frame_buffer) > 5:
-                    frame_buffer.pop(0)
+                if error_flag["error"] is not None:
+                    raise error_flag["error"]
 
-                neighbors = [f for f in frame_buffer if f is not frame]
-
-                # Step A: Temporal VSR inference
-                restored_frame = vsr_engine.process_frame_window(frame, neighbors)
-
-                # Step B: Face Restoration if enabled
-                if face_engine.enabled:
-                    restored_frame, face_count = face_engine.process(restored_frame)
-                    total_faces_detected += face_count
-
-                # Step C: Write to encoder
-                encoder.write_frame(restored_frame)
-
-                processed_count += 1
-                job["currentFrame"] = processed_count
-                progress_pct = round((processed_count / total_frames) * 100.0, 2)
-                job["progress"] = min(progress_pct, 95.0)
-
-                elapsed = time.time() - start_time
-                fps_proc = round(processed_count / max(elapsed, 0.001), 2)
-                remaining_frames = total_frames - processed_count
-                eta_sec = round(remaining_frames / max(fps_proc, 0.01), 1)
-
-                job["fpsProcessing"] = fps_proc
-                job["elapsedSec"] = round(elapsed, 1)
-                job["estimatedRemainingSec"] = eta_sec
-                job["detectedFaces"] = total_faces_detected
-                job["stage"] = f"AI Frame Restoration ({processed_count}/{total_frames})"
-
-                # Live preview thumbnail every 10 frames
-                if processed_count % 10 == 1 or processed_count == total_frames:
-                    try:
-                        thumb = cv2.resize(restored_frame, (320, 320), interpolation=cv2.INTER_AREA)
-                        _, buffer = cv2.imencode('.jpg', thumb, [cv2.IMWRITE_JPEG_QUALITY, 75])
-                        job["liveFramePreview"] = f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}"
-                    except Exception:
+                # Collect frames into a batch
+                try:
+                    frame_idx, frame = decode_queue.get(timeout=1.0)
+                    batch_frames.append(frame)
+                    batch_indices.append(frame_idx)
+                except queue.Empty:
+                    if decode_done.is_set() and decode_queue.empty():
+                        # Process remaining partial batch
                         pass
+                    else:
+                        continue
 
-                if processed_count % 5 == 0 or processed_count == total_frames:
-                    self._notify(job_id)
-                    await asyncio.sleep(0.001)
+                # Process batch when full OR when decoder is done with remaining frames
+                should_process = (
+                    len(batch_frames) >= batch_size or
+                    (decode_done.is_set() and decode_queue.empty() and len(batch_frames) > 0)
+                )
+
+                if not should_process:
+                    continue
+
+                if not batch_frames:
+                    if decode_done.is_set() and decode_queue.empty():
+                        break
+                    continue
+
+                # Update temporal neighbor buffer
+                for bf in batch_frames:
+                    frame_buffer.append(bf)
+                    if len(frame_buffer) > 5:
+                        frame_buffer.pop(0)
+
+                # Build neighbor lists for temporal consistency
+                neighbor_lists = []
+                for i in range(len(batch_frames)):
+                    neighbors = [f for f in frame_buffer if f is not batch_frames[i]]
+                    neighbor_lists.append(neighbors)
+
+                # Batched VSR inference
+                restored_batch = vsr_engine.process_frame_batch(batch_frames, neighbor_lists)
+
+                # Post-process and enqueue for encoding
+                for i, restored_frame in enumerate(restored_batch):
+                    if self.cancel_flags.get(job_id, False):
+                        break
+
+                    # Face Restoration if enabled
+                    if face_engine.enabled:
+                        restored_frame, face_count = face_engine.process(restored_frame)
+                        total_faces_detected += face_count
+
+                    # Non-blocking enqueue to encoder
+                    encode_queue.put(restored_frame, timeout=30)
+
+                    processed_count += 1
+
+                    # Rolling FPS calculation
+                    now = time.time()
+                    _rolling_timestamps.append(now)
+                    if len(_rolling_timestamps) > _rolling_window_size:
+                        _rolling_timestamps.pop(0)
+
+                    # Update job progress (throttled to every 250ms or every batch)
+                    if now - last_notify_time >= 0.25 or processed_count == total_frames:
+                        elapsed = now - start_time
+
+                        if len(_rolling_timestamps) >= 2:
+                            rolling_elapsed = _rolling_timestamps[-1] - _rolling_timestamps[0]
+                            rolling_count = len(_rolling_timestamps) - 1
+                            fps_proc = round(rolling_count / max(rolling_elapsed, 0.001), 2)
+                        else:
+                            fps_proc = round(processed_count / max(elapsed, 0.001), 2)
+
+                        remaining_frames = total_frames - processed_count
+                        eta_sec = round(remaining_frames / max(fps_proc, 0.01), 1)
+                        progress_pct = round((processed_count / total_frames) * 100.0, 2)
+
+                        job["currentFrame"] = processed_count
+                        job["progress"] = min(progress_pct, 95.0)
+                        job["fpsProcessing"] = fps_proc
+                        job["elapsedSec"] = round(elapsed, 1)
+                        job["estimatedRemainingSec"] = eta_sec
+                        job["detectedFaces"] = total_faces_detected
+                        job["stage"] = f"AI Frame Restoration ({processed_count}/{total_frames})"
+
+                        # Live preview thumbnail (every 10 frames)
+                        if processed_count % 10 == 1 or processed_count == total_frames:
+                            try:
+                                preview_h = min(restored_frame.shape[0], 320)
+                                preview_w = min(restored_frame.shape[1], 320)
+                                thumb = cv2.resize(restored_frame, (preview_w, preview_h), interpolation=cv2.INTER_AREA)
+                                _, buffer = cv2.imencode('.jpg', thumb, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                                job["liveFramePreview"] = f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}"
+                            except Exception:
+                                pass
+
+                        self._notify(job_id)
+                        last_notify_time = now
+                        await asyncio.sleep(0.001)
+
+                # Clear batch
+                batch_frames.clear()
+                batch_indices.clear()
+
+                # Check if we're done
+                if decode_done.is_set() and decode_queue.empty():
+                    break
+
+            # Signal encoder thread to finish
+            inference_done.set()
+            encode_queue.put(None)  # sentinel
+
+            # Wait for threads to complete
+            decoder_t.join(timeout=10)
+            encoder_t.join(timeout=60)
+
+            if error_flag["error"] is not None:
+                raise error_flag["error"]
 
             decoder.close()
 
@@ -315,6 +477,14 @@ class RestorationJobManager:
             job["progress"] = 100.0
             job["stage"] = "Restoration successfully completed"
             job["verificationReport"] = report
+
+            # Final performance summary
+            total_elapsed = time.time() - start_time
+            final_fps = round(processed_count / max(total_elapsed, 0.001), 2)
+            print(f"[Pipeline] Job {job_id} COMPLETE: {processed_count} frames in {total_elapsed:.1f}s "
+                  f"({final_fps} FPS avg), device={device_str}",
+                  file=sys.stderr, flush=True)
+
             self._notify(job_id)
 
         except Exception as e:
