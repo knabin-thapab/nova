@@ -25,11 +25,12 @@ from .face_restore import FaceRestorationEngine
 from .encoder import VideoEncoder
 from .validator import VideoValidator
 from .telemetry import SystemTelemetry
-from .runtime import zerogpu_gpu, get_runtime_mode
+from .runtime import spaces, get_runtime_mode
 
 
-@zerogpu_gpu(duration=120)
+@spaces.GPU(duration=120)
 def _run_video_batch_gpu(vsr_engine, batch_frames: List[np.ndarray], neighbor_lists) -> List[np.ndarray]:
+
     """
     ZeroGPU-decorated video batch inference.
     Allocates GPU on-demand, moves model to CUDA, runs batched SR, returns results.

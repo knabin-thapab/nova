@@ -1,10 +1,5 @@
 # Hugging Face ZeroGPU initialization - MUST BE FIRST LINE BEFORE ANY OTHER IMPORT
-try:
-    import spaces
-    HAS_SPACES = True
-except ImportError:
-    spaces = None
-    HAS_SPACES = False
+from pipeline.runtime import spaces, get_runtime_mode
 
 import os
 import sys
@@ -21,12 +16,11 @@ try:
     print("[1/3] Importing core FastAPI application...", flush=True)
     from main import app as fastapi_app, _run_photo_enhancement
     from pipeline.telemetry import SystemTelemetry
-    from pipeline.runtime import zerogpu_gpu, get_runtime_mode
     print("[1/3] [OK] FastAPI app imported successfully", flush=True)
 
     print("[2/3] Building Gradio Worker Dashboard...", flush=True)
 
-    @zerogpu_gpu(duration=60)
+    @spaces.GPU(duration=60)
     def test_enhance_image(img: np.ndarray, mode: str):
         """Quick interactive test function inside the Gradio dashboard (ZeroGPU accelerated)."""
         if img is None:
@@ -34,6 +28,7 @@ try:
         img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
         enhanced_bgr = _run_photo_enhancement(img_bgr, mode=mode, scale=4)
         return cv2.cvtColor(enhanced_bgr, cv2.COLOR_BGR2RGB)
+
 
 
     def get_live_status():

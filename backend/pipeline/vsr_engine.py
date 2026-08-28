@@ -13,11 +13,10 @@ import cv2
 from typing import List, Optional, Dict, Any
 
 from .models import RestorationModel, registry
-from .realesrgan_engine import RealESRGANEngine, get_adaptive_batch_size
+from .realesrgan_engine import RealESRGANEngine, get_realesrgan_engine, get_adaptive_batch_size
 from .temporal_window import TemporalConsistencyManager
 from .preprocessor import VideoPreprocessor
-from .runtime import zerogpu_gpu, get_runtime_mode
-
+from .runtime import get_runtime_mode
 
 
 class TemporalVSREngine(RestorationModel):
@@ -65,12 +64,13 @@ class TemporalVSREngine(RestorationModel):
             content_type=self.content_type,
             mode=self.mode
         )
-        self.sr_engine = RealESRGANEngine(scale=self.scale, content_type=self.content_type, device=device)
+        self.sr_engine = get_realesrgan_engine(content_type=self.content_type, scale=self.scale)
         self.temporal_mgr = TemporalConsistencyManager(
             window_size=5,
             temporal_strength=0.0 if is_anime_text else (0.55 if temporal_consistency else 0.0)
         )
         self.load()
+
 
     def load(self, device: Optional[torch.device] = None) -> None:
         self.sr_engine.load(device)

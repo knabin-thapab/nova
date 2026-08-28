@@ -18,7 +18,8 @@ from typing import Optional, Dict, Any, List
 import urllib.request
 
 from .models import RestorationModel, registry
-from .runtime import zerogpu_gpu, get_runtime_mode
+from .runtime import spaces, get_runtime_mode
+
 
 # Enable optimal PyTorch CPU threading when on CPU
 if torch.get_num_threads() < (os.cpu_count() or 4):
@@ -551,8 +552,25 @@ class RealESRGANEngine(RestorationModel):
         return out_img
 
 
-# Register models into ModelRegistry
-registry.register("photo_x4", RealESRGANEngine(scale=4, content_type="photo"))
-registry.register("photo_x2", RealESRGANEngine(scale=2, content_type="photo"))
-registry.register("anime_x4", RealESRGANEngine(scale=4, content_type="anime"))
-registry.register("anime_x2", RealESRGANEngine(scale=2, content_type="anime"))
+# Shared model registry cache (singleton lifecycle)
+_ENGINE_INSTANCES: Dict[str, RealESRGANEngine] = {}
+
+
+def get_realesrgan_engine(content_type: str = "photo", scale: int = 4) -> RealESRGANEngine:
+    """Returns the shared singleton RealESRGANEngine instance (instantiated exactly once)."""
+    normalized_content = "anime" if content_type in ["anime", "anime_text", "text", "cartoon", "illustration"] else "photo"
+    scale_norm = scale if scale in (2, 4) else 4
+    key = f"{normalized_content}_x{scale_norm}"
+    if key not in _ENGINE_INSTANCES:
+        engine = RealESRGANEngine(scale=scale_norm, content_type=normalized_content)
+        _ENGINE_INSTANCES[key] = engine
+        registry.register(key, engine)
+    return _ENGINE_INSTANCES[key]
+
+
+# Pre-register default models into registry
+get_realesrgan_engine("photo", 4)
+get_realesrgan_engine("photo", 2)
+get_realesrgan_engine("anime", 4)
+get_realesrgan_engine("anime", 2)
+

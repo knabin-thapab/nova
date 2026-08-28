@@ -12,10 +12,9 @@ import numpy as np
 import torch
 from typing import Tuple, Dict, Any, Optional
 
-from .realesrgan_engine import RealESRGANEngine
+from .realesrgan_engine import RealESRGANEngine, get_realesrgan_engine
 from .face_restore import FaceRestorationEngine
-from .runtime import zerogpu_gpu, get_runtime_mode
-
+from .runtime import get_runtime_mode
 
 
 class PhotoRestorationPipeline:
@@ -31,16 +30,13 @@ class PhotoRestorationPipeline:
       6. Zero-Halo Micro-Detail Refinement
     """
     def __init__(self):
-        self._sr_engines: Dict[str, RealESRGANEngine] = {}
         self._face_engine = FaceRestorationEngine(enabled=True, strength_mode="conservative")
 
     def get_sr_engine(self, mode: str = "balanced", scale: int = 4) -> RealESRGANEngine:
         is_anime = mode in ("anime", "illustration", "anime_text")
         content_type = "anime" if is_anime else "photo"
-        key = f"{content_type}_x{scale}"
-        if key not in self._sr_engines:
-            self._sr_engines[key] = RealESRGANEngine(scale=scale, content_type=content_type)
-        return self._sr_engines[key]
+        return get_realesrgan_engine(content_type=content_type, scale=scale)
+
 
     def estimate_degradation(self, img_bgr: np.ndarray) -> Dict[str, float]:
         """Calculates true frequency and spatial degradation metrics."""

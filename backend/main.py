@@ -1,10 +1,6 @@
 # Hugging Face ZeroGPU initialization - MUST BE FIRST LINE BEFORE TORCH OR CUDA
-try:
-    import spaces
-    HAS_SPACES = True
-except ImportError:
-    spaces = None
-    HAS_SPACES = False
+from pipeline.runtime import spaces, get_runtime_mode, HAS_SPACES
+
 
 import os
 import sys
@@ -21,15 +17,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, Response
 import uvicorn
 
-from pipeline.runtime import zerogpu_gpu, get_runtime_mode
 from pipeline.media_probe import probe_video
 from pipeline.analyzer import analyze_image, analyze_video
 from pipeline.job_manager import RestorationJobManager
 from pipeline.telemetry import SystemTelemetry
 from pipeline.models import registry
-from pipeline.realesrgan_engine import RealESRGANEngine
+from pipeline.realesrgan_engine import RealESRGANEngine, get_realesrgan_engine
 from pipeline.face_restore import FaceRestorationEngine
 from pipeline.validator import VideoValidator
+
 
 
 
@@ -142,22 +138,15 @@ async def add_custom_cors_and_security_headers(request: Request, call_next):
 
 job_manager = RestorationJobManager(STORAGE_DIR)
 
-# Mode-aware Real-ESRGAN engine cache
-_sr_engines: Dict[str, RealESRGANEngine] = {}
+# Shared Real-ESRGAN and Face restoration instances
 _face_engine: Optional[FaceRestorationEngine] = None
 
 
 def get_sr_engine(mode: str = "balanced", scale: int = 4) -> RealESRGANEngine:
-    """Get or instantiate cached Real-ESRGAN engine for the given mode & scale."""
-    global _sr_engines
+    """Get singleton cached Real-ESRGAN engine for the given mode & scale."""
     is_anime = mode in ("anime", "illustration", "anime_text")
     content_type = "anime" if is_anime else "photo"
-    engine_key = f"{content_type}_x{scale}"
-
-    if engine_key not in _sr_engines:
-        _sr_engines[engine_key] = RealESRGANEngine(scale=scale, content_type=content_type)
-
-    return _sr_engines[engine_key]
+    return get_realesrgan_engine(content_type=content_type, scale=scale)
 
 
 def get_face_engine(strength_mode: str = "balanced") -> FaceRestorationEngine:
@@ -169,8 +158,8 @@ def get_face_engine(strength_mode: str = "balanced") -> FaceRestorationEngine:
 
 from pipeline.photo_restorer import photo_restorer
 
-# Core AI photo restoration execution wrapper (ZeroGPU accelerated)
-@zerogpu_gpu(duration=60)
+# Core AI photo restoration execution wrapper (Module-scope ZeroGPU accelerated)
+@spaces.GPU(duration=60)
 def _run_photo_restoration(
     img: np.ndarray,
     scale: int,
@@ -178,6 +167,7 @@ def _run_photo_restoration(
     face_restoration: bool = False,
     face_strength: str = "conservative"
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
+
     """Inside @spaces.GPU: CUDA is now available. Move model to GPU before inference."""
     import time as _time
     t0 = _time.perf_counter()
