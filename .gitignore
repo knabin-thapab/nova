@@ -52,3 +52,15 @@ prompt
 server.log
 # Skills directory
 /skills/
+
+# Python & ML weights
+__pycache__/
+*.pyc
+*.pth
+*.pt
+*.bin
+backend/pipeline/weights/
+backend/storage/
+storage/
+*.mp4
+*.encoding.mp4
