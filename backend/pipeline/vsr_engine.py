@@ -1,3 +1,11 @@
+# Hugging Face ZeroGPU initialization - MUST BE FIRST LINE BEFORE TORCH
+try:
+    import spaces
+    HAS_SPACES = True
+except ImportError:
+    spaces = None
+    HAS_SPACES = False
+
 import torch
 import torch.nn as nn
 import numpy as np
@@ -8,6 +16,8 @@ from .models import RestorationModel, registry
 from .realesrgan_engine import RealESRGANEngine, get_adaptive_batch_size
 from .temporal_window import TemporalConsistencyManager
 from .preprocessor import VideoPreprocessor
+from .runtime import zerogpu_gpu, get_runtime_mode
+
 
 
 class TemporalVSREngine(RestorationModel):

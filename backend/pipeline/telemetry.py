@@ -1,54 +1,56 @@
+# Hugging Face ZeroGPU initialization - MUST BE FIRST LINE BEFORE TORCH OR CUDA
+try:
+    import spaces
+    IS_ZEROGPU_ENV = True
+except ImportError:
+    import os as _os
+    IS_ZEROGPU_ENV = _os.environ.get("SPACES_ZERO_GPU", "").lower() in ("true", "1") or "SPACE_ID" in _os.environ
+    spaces = None
+
 import os
 import sys
 import psutil
 import torch
 from typing import Dict, Any
 
-try:
-    import spaces
-    IS_ZEROGPU_ENV = True
-except ImportError:
-    IS_ZEROGPU_ENV = os.environ.get("SPACES_ZERO_GPU", "").lower() in ("true", "1") or "SPACE_ID" in os.environ
-
 
 def log_startup_gpu_diagnostics():
     """
     Emit comprehensive GPU diagnostics at server startup.
     Logs CUDA availability, device properties, VRAM, cuDNN, and PyTorch CUDA version.
+    For ZeroGPU: CUDA will show as unavailable at startup — GPU is allocated on-demand.
     """
     print("=" * 60, file=sys.stderr, flush=True)
-    print("[GPU DIAGNOSTICS] NOVA Server Startup", file=sys.stderr, flush=True)
-    print(f"[GPU] CUDA available: {torch.cuda.is_available()}", file=sys.stderr, flush=True)
-    print(f"[GPU] PyTorch version: {torch.__version__}", file=sys.stderr, flush=True)
-    print(f"[GPU] PyTorch CUDA version: {torch.version.cuda}", file=sys.stderr, flush=True)
-    print(f"[GPU] cuDNN available: {torch.backends.cudnn.is_available()}", file=sys.stderr, flush=True)
+    print("[NOVA] Server Startup Diagnostics", file=sys.stderr, flush=True)
+    print(f"[ENV] Runtime mode: {'zerogpu' if IS_ZEROGPU_ENV else 'standalone'}", file=sys.stderr, flush=True)
+    print(f"[ENV] PyTorch version: {torch.__version__}", file=sys.stderr, flush=True)
+    print(f"[ENV] PyTorch CUDA build: {torch.version.cuda}", file=sys.stderr, flush=True)
+    print(f"[ENV] cuDNN available: {torch.backends.cudnn.is_available()}", file=sys.stderr, flush=True)
 
-    if torch.cuda.is_available():
+    if IS_ZEROGPU_ENV:
+        print(f"[ZeroGPU] Hugging Face ZeroGPU environment detected", file=sys.stderr, flush=True)
+        print(f"[ZeroGPU] GPU will be allocated on-demand via @spaces.GPU decorator", file=sys.stderr, flush=True)
+        print(f"[ZeroGPU] CUDA available at startup: {torch.cuda.is_available()} (expected: varies)", file=sys.stderr, flush=True)
+        print(f"[ZeroGPU] Models loaded on CPU — moved to CUDA inside GPU execution context", file=sys.stderr, flush=True)
+    elif torch.cuda.is_available():
         print(f"[GPU] CUDA device count: {torch.cuda.device_count()}", file=sys.stderr, flush=True)
         for i in range(torch.cuda.device_count()):
             props = torch.cuda.get_device_properties(i)
             print(f"[GPU] Device {i}: {props.name}", file=sys.stderr, flush=True)
             print(f"[GPU]   VRAM total:     {props.total_mem / (1024**3):.2f} GB", file=sys.stderr, flush=True)
             print(f"[GPU]   VRAM allocated: {torch.cuda.memory_allocated(i) / (1024**3):.2f} GB", file=sys.stderr, flush=True)
-            print(f"[GPU]   VRAM reserved:  {torch.cuda.memory_reserved(i) / (1024**3):.2f} GB", file=sys.stderr, flush=True)
             print(f"[GPU]   Compute capability: {props.major}.{props.minor}", file=sys.stderr, flush=True)
         print(f"[GPU] cuDNN benchmark: {torch.backends.cudnn.benchmark}", file=sys.stderr, flush=True)
-        print(f"[GPU] Selected device: cuda:0", file=sys.stderr, flush=True)
-    elif IS_ZEROGPU_ENV:
-        print(f"[GPU] ZeroGPU environment detected — GPU allocated on-demand", file=sys.stderr, flush=True)
     else:
-        print(f"[GPU] WARNING: No CUDA GPU detected!", file=sys.stderr, flush=True)
-        print(f"[GPU] Running in CPU-only mode — video restoration will be SIGNIFICANTLY slower.",
-              file=sys.stderr, flush=True)
-        print(f"[GPU] To enable GPU acceleration, install PyTorch with CUDA support:", file=sys.stderr, flush=True)
-        print(f"[GPU]   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121",
-              file=sys.stderr, flush=True)
+        print(f"[CPU] No CUDA GPU detected — running in CPU-only mode", file=sys.stderr, flush=True)
+        print(f"[CPU] Video restoration will be significantly slower", file=sys.stderr, flush=True)
 
     print("=" * 60, file=sys.stderr, flush=True)
 
 
 # Run diagnostics on module import (server startup)
 log_startup_gpu_diagnostics()
+
 
 
 class SystemTelemetry:

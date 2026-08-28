@@ -1,3 +1,11 @@
+# Hugging Face ZeroGPU initialization - MUST BE FIRST LINE BEFORE TORCH
+try:
+    import spaces
+    HAS_SPACES = True
+except ImportError:
+    spaces = None
+    HAS_SPACES = False
+
 import os
 import cv2
 import numpy as np
@@ -6,6 +14,8 @@ from typing import Tuple, Dict, Any, Optional
 
 from .realesrgan_engine import RealESRGANEngine
 from .face_restore import FaceRestorationEngine
+from .runtime import zerogpu_gpu, get_runtime_mode
+
 
 
 class PhotoRestorationPipeline:

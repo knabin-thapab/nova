@@ -5,9 +5,10 @@ from main import app as fastapi_app
 with gr.Blocks(title="NOVA AI Worker") as demo:
     gr.Markdown("# NOVA AI Worker")
 
-# Mount our custom FastAPI routes onto Gradio's internal FastAPI app
-demo.app.mount("/api", fastapi_app)
-demo.app.mount("/storage", fastapi_app)
+# Insert all FastAPI routes at top of Gradio's internal app routes
+for r in fastapi_app.routes:
+    demo.app.routes.insert(0, r)
+
 
 client = TestClient(demo.app)
 

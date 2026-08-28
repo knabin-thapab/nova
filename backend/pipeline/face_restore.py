@@ -1,3 +1,11 @@
+# Hugging Face ZeroGPU initialization - MUST BE FIRST LINE BEFORE TORCH
+try:
+    import spaces
+    HAS_SPACES = True
+except ImportError:
+    spaces = None
+    HAS_SPACES = False
+
 import os
 import cv2
 import numpy as np
@@ -6,6 +14,8 @@ import torch.nn as nn
 from typing import List, Tuple, Optional, Dict, Any
 
 from .models import RestorationModel, registry
+from .runtime import zerogpu_gpu, get_runtime_mode
+
 
 
 class FaceRestorationEngine(RestorationModel):

@@ -1,3 +1,11 @@
+# Hugging Face ZeroGPU initialization - MUST BE FIRST LINE BEFORE TORCH OR CUDA
+try:
+    import spaces
+    HAS_SPACES = True
+except ImportError:
+    spaces = None
+    HAS_SPACES = False
+
 import os
 import sys
 import time
@@ -17,20 +25,29 @@ from .face_restore import FaceRestorationEngine
 from .encoder import VideoEncoder
 from .validator import VideoValidator
 from .telemetry import SystemTelemetry
-
-try:
-    import spaces
-    HAS_SPACES = True
-except ImportError:
-    spaces = None
-    HAS_SPACES = False
+from .runtime import zerogpu_gpu, get_runtime_mode
 
 
-def zero_gpu_task(duration: int = 120):
-    """Dynamic ZeroGPU task wrapper with graceful fallback."""
-    if HAS_SPACES and hasattr(spaces, "GPU"):
-        return spaces.GPU(duration=duration)
-    return lambda f: f
+@zerogpu_gpu(duration=120)
+def _run_video_batch_gpu(vsr_engine, batch_frames: List[np.ndarray], neighbor_lists) -> List[np.ndarray]:
+    """
+    ZeroGPU-decorated video batch inference.
+    Allocates GPU on-demand, moves model to CUDA, runs batched SR, returns results.
+    Each call gets its own GPU allocation context — compatible with ZeroGPU's
+    dynamic allocation model where GPU is only available inside @spaces.GPU.
+    """
+    # Inside @spaces.GPU context: torch.cuda.is_available() is now True
+    if torch.cuda.is_available():
+        device = torch.device('cuda:0')
+        # Move SR engine model to GPU if not already there
+        sr = vsr_engine.sr_engine
+        if sr._current_device.type != 'cuda':
+            sr._ensure_device(device)
+            gpu_name = torch.cuda.get_device_name(device)
+            print(f"[ZeroGPU] GPU allocated for video batch: {gpu_name} ({device})", file=sys.stderr, flush=True)
+
+    result = vsr_engine.process_frame_batch(batch_frames, neighbor_lists)
+    return result
 
 
 class RestorationJobManager:
@@ -357,8 +374,9 @@ class RestorationJobManager:
                     neighbors = [f for f in frame_buffer if f is not batch_frames[i]]
                     neighbor_lists.append(neighbors)
 
-                # Batched VSR inference
-                restored_batch = vsr_engine.process_frame_batch(batch_frames, neighbor_lists)
+                # Batched VSR inference (ZeroGPU: GPU allocated per-batch call)
+                restored_batch = _run_video_batch_gpu(vsr_engine, batch_frames, neighbor_lists)
+
 
                 # Post-process and enqueue for encoding
                 for i, restored_frame in enumerate(restored_batch):

@@ -1,8 +1,17 @@
+# Hugging Face ZeroGPU initialization - MUST BE FIRST LINE BEFORE TORCH
+try:
+    import spaces
+    HAS_SPACES = True
+except ImportError:
+    spaces = None
+    HAS_SPACES = False
+
 import os
 import time
 import abc
 import torch
 from typing import Dict, Any, Optional, List
+
 
 
 class RestorationModel(abc.ABC):

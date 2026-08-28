@@ -1,5 +1,14 @@
+# Hugging Face ZeroGPU initialization - MUST BE FIRST LINE BEFORE TORCH OR CUDA
+try:
+    import spaces
+    HAS_SPACES = True
+except ImportError:
+    spaces = None
+    HAS_SPACES = False
+
 import os
 import sys
+import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,8 +18,9 @@ from typing import Optional, Dict, Any, List
 import urllib.request
 
 from .models import RestorationModel, registry
+from .runtime import zerogpu_gpu, get_runtime_mode
 
-# Enable optimal PyTorch CPU threading
+# Enable optimal PyTorch CPU threading when on CPU
 if torch.get_num_threads() < (os.cpu_count() or 4):
     torch.set_num_threads(os.cpu_count() or 4)
 
@@ -18,6 +28,7 @@ if torch.get_num_threads() < (os.cpu_count() or 4):
 if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.enabled = True
+
 
 WEIGHTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights")
 os.makedirs(WEIGHTS_DIR, exist_ok=True)
@@ -236,26 +247,31 @@ class RealESRGANEngine(RestorationModel):
         self._ensure_device(device)
         self._is_loaded = True
 
-        # Log device placement
-        _log_gpu_diagnostics(f"Model '{self.name}' loaded on {self._current_device}")
+        # Log device placement (omit noisy CPU warning during startup on ZeroGPU spaces)
+        if torch.cuda.is_available():
+            _log_gpu_diagnostics(f"Model '{self.name}' initialized on {self._current_device}")
+        elif not HAS_SPACES:
+            print(f"[Engine] Model '{self.name}' initialized on {self._current_device}", file=sys.stderr, flush=True)
 
     def warmup(self):
-        """Run a single dummy forward pass to initialize CUDA kernels and cuDNN autotuner."""
+        """Run a single dummy forward pass to initialize CUDA kernels and cuDNN autotuner on active device."""
         if self._warmed_up or self.model is None:
             return
         try:
-            dummy = torch.zeros(1, 3, 64, 64, device=self._current_device)
+            active_dev = self._current_device
+            dummy = torch.zeros(1, 3, 64, 64, device=active_dev)
             with torch.inference_mode():
-                if self._current_device.type == 'cuda':
+                if active_dev.type == 'cuda':
                     with torch.amp.autocast('cuda', dtype=torch.float16):
                         _ = self.model(dummy)
-                    torch.cuda.synchronize()
+                    torch.cuda.synchronize(active_dev)
+                    gpu_name = torch.cuda.get_device_name(active_dev)
+                    print(f"[ZeroGPU-CUDA] GPU Warmup complete on {active_dev} ({gpu_name})", file=sys.stderr, flush=True)
                 else:
                     _ = self.model(dummy)
             self._warmed_up = True
-            print(f"[GPU] Warmup complete on {self._current_device}", file=sys.stderr, flush=True)
         except Exception as e:
-            print(f"[GPU] Warmup failed: {e}", file=sys.stderr, flush=True)
+            print(f"[GPU] Warmup notice: {e}", file=sys.stderr, flush=True)
 
     def unload(self) -> None:
         if self.model is not None:
@@ -275,15 +291,19 @@ class RealESRGANEngine(RestorationModel):
         elif self._target_device_str:
             desired = torch.device(self._target_device_str)
         else:
-            desired = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            desired = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
         if self._current_device != desired and self.model is not None:
             try:
                 self.model = self.model.to(desired)
                 self._current_device = desired
-                self._warmed_up = False  # need re-warmup on new device
-            except Exception:
-                print(f"[GPU] WARNING: Failed to move model to {desired}, falling back to CPU",
+                self._warmed_up = False  # Trigger GPU warmup on new CUDA device
+                if desired.type == 'cuda':
+                    gpu_name = torch.cuda.get_device_name(desired)
+                    print(f"[ZeroGPU-CUDA] Attached model to {desired} ({gpu_name})", file=sys.stderr, flush=True)
+                    self.warmup()
+            except Exception as e:
+                print(f"[GPU] WARNING: Failed to move model to {desired}: {e}, falling back to CPU",
                       file=sys.stderr, flush=True)
                 self.model = self.model.to('cpu')
                 self._current_device = torch.device('cpu')
@@ -297,6 +317,7 @@ class RealESRGANEngine(RestorationModel):
             "cuda_available": torch.cuda.is_available(),
             "model_loaded": self._is_loaded,
             "warmed_up": self._warmed_up,
+            "runtime_mode": get_runtime_mode(),
         }
         if torch.cuda.is_available():
             info["gpu_name"] = torch.cuda.get_device_name(0)
@@ -331,7 +352,7 @@ class RealESRGANEngine(RestorationModel):
         """
         Enhances an image with neural super-resolution.
         Preserves true resolution with seamless tiled processing when needed.
-        Supports 2x and 4x scale.
+        Supports 2x and 4x scale with true CUDA/ZeroGPU execution.
         """
         if image_bgr is None:
             return image_bgr
@@ -339,11 +360,9 @@ class RealESRGANEngine(RestorationModel):
         if not self._is_loaded or self.model is None:
             self.load()
 
-        if not self._warmed_up:
-            self.warmup()
-
         active_device = self._ensure_device()
         h, w = image_bgr.shape[:2]
+        t_start = time.perf_counter()
 
         # Convert BGR uint8 -> RGB float32 tensor in range [0, 1]
         img_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
@@ -358,6 +377,11 @@ class RealESRGANEngine(RestorationModel):
             if active_device.type == 'cuda':
                 with torch.amp.autocast('cuda', dtype=torch.float16):
                     enhanced = self.model(tensor)
+                torch.cuda.synchronize(active_device)
+                vram_mb = torch.cuda.memory_allocated(active_device) / (1024 * 1024)
+                gpu_name = torch.cuda.get_device_name(active_device)
+                elapsed = time.perf_counter() - t_start
+                print(f"[ZeroGPU-CUDA] Photo SR complete: GPU='{gpu_name}' ({active_device}) | Input: {w}x{h} -> {w*4}x{h*4} | VRAM: {vram_mb:.1f} MB | Time: {elapsed:.3f}s", file=sys.stderr, flush=True)
             else:
                 enhanced = self.model(tensor)
             out_rgb = enhanced.squeeze(0).permute(1, 2, 0).float().cpu().numpy()
@@ -369,7 +393,6 @@ class RealESRGANEngine(RestorationModel):
         out_bgr = cv2.cvtColor(out_rgb, cv2.COLOR_RGB2BGR)
 
         # Scale handling: RRDBNet natively produces 4x.
-        # If scale=2 is requested, downsample using anti-aliased Lanczos-4 interpolation.
         if self.scale == 2:
             target_w = w * 2
             target_h = h * 2
@@ -380,8 +403,8 @@ class RealESRGANEngine(RestorationModel):
     @torch.inference_mode()
     def enhance_batch(self, frames_bgr: List[np.ndarray]) -> List[np.ndarray]:
         """
-        Batched inference for video frames. Processes multiple frames in a single
-        GPU forward pass for dramatically higher throughput.
+        Batched inference for video frames on active CUDA device. Processes multiple frames
+        in a single GPU forward pass for dramatically higher throughput.
         All frames must have the same (H, W) dimensions.
         Returns list of enhanced BGR frames.
         """
@@ -390,13 +413,13 @@ class RealESRGANEngine(RestorationModel):
 
         if not self._is_loaded or self.model is None:
             self.load()
-        if not self._warmed_up:
-            self.warmup()
 
         active_device = self._ensure_device()
         h, w = frames_bgr[0].shape[:2]
         max_dim = max(h, w)
         single_pass_threshold = self.get_max_single_pass_size()
+        batch_count = len(frames_bgr)
+        t_start = time.perf_counter()
 
         # If frames are too large for single-pass, fall back to per-frame tiled processing
         if max_dim > single_pass_threshold:
@@ -417,17 +440,23 @@ class RealESRGANEngine(RestorationModel):
             if active_device.type == 'cuda':
                 with torch.amp.autocast('cuda', dtype=torch.float16):
                     enhanced_batch = self.model(batch_tensor)
+                torch.cuda.synchronize(active_device)
+                vram_mb = torch.cuda.memory_allocated(active_device) / (1024 * 1024)
+                gpu_name = torch.cuda.get_device_name(active_device)
+                elapsed = time.perf_counter() - t_start
+                batch_fps = batch_count / max(elapsed, 0.0001)
+                print(f"[ZeroGPU-CUDA] Batch SR ({batch_count} frames): GPU='{gpu_name}' ({active_device}) | Frame: {w}x{h} -> {w*4}x{h*4} | VRAM: {vram_mb:.1f} MB | Batch FPS: {batch_fps:.2f}", file=sys.stderr, flush=True)
             else:
                 enhanced_batch = self.model(batch_tensor)
         except RuntimeError as e:
             if "out of memory" in str(e).lower():
                 # OOM: fall back to single-frame processing
-                print(f"[GPU] OOM during batch inference (batch={len(frames_bgr)}), "
-                      f"falling back to single-frame processing", file=sys.stderr, flush=True)
+                print(f"[GPU] OOM during batch inference (batch={batch_count}), falling back to single-frame processing", file=sys.stderr, flush=True)
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                 return [self.enhance_image(f) for f in frames_bgr]
             raise
+
 
         # Convert back to list of BGR numpy arrays
         results = []

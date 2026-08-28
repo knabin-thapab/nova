@@ -1,4 +1,13 @@
+# Hugging Face ZeroGPU initialization - MUST BE FIRST LINE BEFORE TORCH OR CUDA
+try:
+    import spaces
+    HAS_SPACES = True
+except ImportError:
+    spaces = None
+    HAS_SPACES = False
+
 import os
+import sys
 import time
 import shutil
 import asyncio
@@ -12,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, Response
 import uvicorn
 
+from pipeline.runtime import zerogpu_gpu, get_runtime_mode
 from pipeline.media_probe import probe_video
 from pipeline.analyzer import analyze_image, analyze_video
 from pipeline.job_manager import RestorationJobManager
@@ -21,20 +31,6 @@ from pipeline.realesrgan_engine import RealESRGANEngine
 from pipeline.face_restore import FaceRestorationEngine
 from pipeline.validator import VideoValidator
 
-# ZeroGPU dynamic execution wrapper
-try:
-    import spaces
-    HAS_SPACES = True
-except ImportError:
-    spaces = None
-    HAS_SPACES = False
-
-
-def zerogpu_inference(duration: int = 60):
-    """Dynamic Hugging Face ZeroGPU decorator with graceful CPU / native CUDA fallback."""
-    if HAS_SPACES and hasattr(spaces, "GPU"):
-        return spaces.GPU(duration=duration)
-    return lambda fn: fn
 
 
 # Concurrency guard for shared GPU inference
@@ -174,7 +170,7 @@ def get_face_engine(strength_mode: str = "balanced") -> FaceRestorationEngine:
 from pipeline.photo_restorer import photo_restorer
 
 # Core AI photo restoration execution wrapper (ZeroGPU accelerated)
-@zerogpu_inference(duration=60)
+@zerogpu_gpu(duration=60)
 def _run_photo_restoration(
     img: np.ndarray,
     scale: int,
@@ -182,7 +178,20 @@ def _run_photo_restoration(
     face_restoration: bool = False,
     face_strength: str = "conservative"
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
-    return photo_restorer.restore_photo(
+    """Inside @spaces.GPU: CUDA is now available. Move model to GPU before inference."""
+    import time as _time
+    t0 = _time.perf_counter()
+
+    # Inside ZeroGPU context — move SR engine to GPU
+    if torch.cuda.is_available():
+        device = torch.device('cuda:0')
+        sr_engine = photo_restorer.get_sr_engine(mode=mode, scale=scale)
+        if sr_engine._current_device.type != 'cuda':
+            sr_engine._ensure_device(device)
+        gpu_name = torch.cuda.get_device_name(device)
+        print(f"[ZeroGPU] Photo restoration GPU allocated: {gpu_name} ({device})", file=sys.stderr, flush=True)
+
+    result, metadata = photo_restorer.restore_photo(
         image_bgr=img,
         scale=scale,
         mode=mode,
@@ -190,10 +199,18 @@ def _run_photo_restoration(
         face_strength=face_strength
     )
 
+    elapsed = _time.perf_counter() - t0
+    if torch.cuda.is_available():
+        vram_mb = torch.cuda.memory_allocated(0) / (1024 * 1024)
+        print(f"[ZeroGPU] Photo restoration complete: {elapsed:.3f}s | VRAM: {vram_mb:.1f} MB", file=sys.stderr, flush=True)
+
+    return result, metadata
+
 
 def _run_photo_enhancement(img: np.ndarray, mode: str, scale: int) -> np.ndarray:
     res, _ = _run_photo_restoration(img, scale=scale, mode=mode)
     return res
+
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +256,8 @@ def root():
         "status": "online",
         "system": "NOVA Production AI Media Restoration Engine",
         "version": "2.1.0",
+        "runtime_mode": get_runtime_mode(),
+        "zerogpu": HAS_SPACES,
         "docs": "/docs",
         "health": "/api/health",
         "ready": "/api/ready",
@@ -252,12 +271,15 @@ def root():
 def health_check():
     telemetry = SystemTelemetry.get_hardware_telemetry()
     gpu_info = telemetry.get("gpu", {})
-    cuda_avail = torch.cuda.is_available()
+    runtime = get_runtime_mode()
+    cuda_avail = torch.cuda.is_available() or runtime == "zerogpu"
     return {
         "status": "online",
         "service": "nova-worker",
         "api": True,
         "gpu_available": cuda_avail,
+        "runtime_mode": runtime,
+        "zerogpu": HAS_SPACES,
         "worker_ready": True,
         "worker": telemetry.get("workerType", "self-hosted"),
         "gpu": gpu_info,
@@ -272,6 +294,7 @@ def health_check():
             "tiledInference": True
         }
     }
+
 
 
 
