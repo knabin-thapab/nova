@@ -7,7 +7,7 @@ sdk: gradio
 app_file: app.py
 pinned: false
 license: apache-2.0
-short_description: NOVA hosted AI worker for photo enhancement and video restoration
+short_description: NOVA AI photo and video restoration worker
 ---
 
 # ⚡ NOVA — AI Photo Enhancement & Video Super-Resolution Worker
