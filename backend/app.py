@@ -93,12 +93,27 @@ except Exception as e:
     app = gr.mount_gradio_app(fastapi_app, demo, path="/gradio")
 
 
+import uvicorn
+
 # Hugging Face Space & local entrypoint launcher
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
-    print(f"[*] Launching NOVA AI Worker on 0.0.0.0:{port} via Gradio...", flush=True)
-    demo.launch(
-        server_name="0.0.0.0",
-        server_port=port,
-        show_error=True
+    print(f"[*] Launching NOVA Production ASGI Application on 0.0.0.0:{port}...", flush=True)
+    print("=" * 60, flush=True)
+    print("Registered API Routes on ASGI Root:", flush=True)
+    for route in fastapi_app.routes:
+        methods = getattr(route, 'methods', None)
+        methods_str = f"[{', '.join(methods)}]" if methods else "[ASGI Mount]"
+        print(f"  -> {methods_str:<20} {route.path}", flush=True)
+    print(f"  -> [Gradio Dashboard]  /gradio", flush=True)
+    print("=" * 60, flush=True)
+    
+    # Launch ASGI root app via Uvicorn so FastAPI owns /api/* and /storage/* without Gradio 403 CSRF interference
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=port,
+        log_level="info",
+        access_log=True
     )
+

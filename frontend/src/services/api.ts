@@ -47,10 +47,10 @@ export function getBackendUrl(): string {
   if (custom && custom.trim()) {
     return normalizeBackendUrl(custom);
   }
-  return import.meta.env.VITE_API_URL
-    ? normalizeBackendUrl(import.meta.env.VITE_API_URL)
-    : '';
+  const envUrl = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL;
+  return envUrl ? normalizeBackendUrl(envUrl) : '';
 }
+
 
 export function getShareableUrl(): string {
   const backend = getBackendUrl();

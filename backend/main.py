@@ -251,10 +251,16 @@ def root():
 @app.get("/api/v1/health")
 def health_check():
     telemetry = SystemTelemetry.get_hardware_telemetry()
+    gpu_info = telemetry.get("gpu", {})
+    cuda_avail = torch.cuda.is_available()
     return {
         "status": "online",
+        "service": "nova-worker",
+        "api": True,
+        "gpu_available": cuda_avail,
+        "worker_ready": True,
         "worker": telemetry.get("workerType", "self-hosted"),
-        "gpu": telemetry.get("gpu", {}),
+        "gpu": gpu_info,
         "features": {
             "realEsrgan": True,
             "temporalVsr": True,
@@ -266,6 +272,7 @@ def health_check():
             "tiledInference": True
         }
     }
+
 
 
 @app.get("/api/ready")
