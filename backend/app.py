@@ -76,10 +76,16 @@ try:
 
     print("[2/3] [OK] Gradio dashboard built successfully", flush=True)
 
-    print("[3/3] Mounting Gradio dashboard onto FastAPI root application at /gradio...", flush=True)
-    # Mount Gradio at /gradio so Gradio's catch-all route does NOT hijack /api/* or return 403 on API POST requests
+    print("[3/3] Merging FastAPI API routes onto Gradio ASGI application...", flush=True)
+    # Register all FastAPI routes onto demo.app with top priority so HF Space's Gradio runner handles /api/* without 403 or HTML hijacking
+    for r in fastapi_app.routes:
+        if r not in demo.app.routes:
+            demo.app.routes.insert(0, r)
+
+    # Mount Gradio dashboard at /gradio
     app = gr.mount_gradio_app(fastapi_app, demo, path="/gradio")
     print("[3/3] [OK] Combined FastAPI + Gradio ASGI application ready", flush=True)
+
 
 except Exception as e:
     print("=" * 60, flush=True)
