@@ -107,7 +107,12 @@ except Exception as e:
 
     with gr.Blocks(title="NOVA Startup Diagnostic") as demo:
         gr.Markdown(f"# NOVA Startup Diagnostics\n```\n{traceback.format_exc()}\n```")
-    app = gr.mount_gradio_app(fastapi_app, demo, path="/gradio")
+    try:
+        from main import app as fastapi_app
+        app = gr.mount_gradio_app(fastapi_app, demo, path="/gradio")
+    except Exception:
+        app = demo.app
+
 
 
 import uvicorn

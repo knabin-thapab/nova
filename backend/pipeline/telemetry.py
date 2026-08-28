@@ -14,6 +14,13 @@ import torch
 from typing import Dict, Any
 
 
+def _get_total_mem(props) -> int:
+    """Safely retrieves total VRAM across native PyTorch CUDA props and ZeroGPU SimpleNamespace wrappers."""
+    if props is None:
+        return 0
+    return int(getattr(props, 'total_memory', getattr(props, 'total_mem', 0)))
+
+
 def log_startup_gpu_diagnostics():
     """
     Emit comprehensive GPU diagnostics at server startup.
@@ -36,10 +43,12 @@ def log_startup_gpu_diagnostics():
         print(f"[GPU] CUDA device count: {torch.cuda.device_count()}", file=sys.stderr, flush=True)
         for i in range(torch.cuda.device_count()):
             props = torch.cuda.get_device_properties(i)
-            print(f"[GPU] Device {i}: {props.name}", file=sys.stderr, flush=True)
-            print(f"[GPU]   VRAM total:     {props.total_mem / (1024**3):.2f} GB", file=sys.stderr, flush=True)
+            gpu_name = getattr(props, 'name', torch.cuda.get_device_name(i))
+            total_vram = _get_total_mem(props)
+            print(f"[GPU] Device {i}: {gpu_name}", file=sys.stderr, flush=True)
+            print(f"[GPU]   VRAM total:     {total_vram / (1024**3):.2f} GB", file=sys.stderr, flush=True)
             print(f"[GPU]   VRAM allocated: {torch.cuda.memory_allocated(i) / (1024**3):.2f} GB", file=sys.stderr, flush=True)
-            print(f"[GPU]   Compute capability: {props.major}.{props.minor}", file=sys.stderr, flush=True)
+            print(f"[GPU]   Compute capability: {getattr(props, 'major', 0)}.{getattr(props, 'minor', 0)}", file=sys.stderr, flush=True)
         print(f"[GPU] cuDNN benchmark: {torch.backends.cudnn.benchmark}", file=sys.stderr, flush=True)
     else:
         print(f"[CPU] No CUDA GPU detected — running in CPU-only mode", file=sys.stderr, flush=True)
@@ -50,7 +59,6 @@ def log_startup_gpu_diagnostics():
 
 # Run diagnostics on module import (server startup)
 log_startup_gpu_diagnostics()
-
 
 
 class SystemTelemetry:
@@ -86,15 +94,17 @@ class SystemTelemetry:
         gpu_available = torch.cuda.is_available()
 
         if IS_ZEROGPU_ENV:
+            gpu_props = torch.cuda.get_device_properties(0) if gpu_available else None
+            total_vram = _get_total_mem(gpu_props) if gpu_props else 0
             gpu_info = {
                 "available": True,
                 "zeroGpu": True,
                 "allocated": gpu_available,
                 "device": "NVIDIA ZeroGPU (Dynamic Allocation)",
-                "name": torch.cuda.get_device_name(0) if gpu_available else "Hugging Face ZeroGPU Pool (On-Demand)",
+                "name": getattr(gpu_props, 'name', torch.cuda.get_device_name(0)) if gpu_available else "Hugging Face ZeroGPU Pool (On-Demand)",
                 "vramUsedGB": round(torch.cuda.memory_allocated(0) / (1024 ** 3), 2) if gpu_available else None,
-                "vramTotalGB": round(torch.cuda.get_device_properties(0).total_mem / (1024 ** 3), 2) if gpu_available else None,
-                "utilization": round((torch.cuda.memory_allocated(0) / max(torch.cuda.get_device_properties(0).total_mem, 1)) * 100, 1) if gpu_available else None,
+                "vramTotalGB": round(total_vram / (1024 ** 3), 2) if gpu_available and total_vram > 0 else None,
+                "utilization": round((torch.cuda.memory_allocated(0) / max(total_vram, 1)) * 100, 1) if gpu_available and total_vram > 0 else None,
                 "status": "active" if gpu_available else "standby_ready"
             }
         elif gpu_available:
@@ -102,8 +112,10 @@ class SystemTelemetry:
             vram_total = 0.0
             utilization = 0.0
             try:
+                gpu_props = torch.cuda.get_device_properties(0)
+                total_vram = _get_total_mem(gpu_props)
                 vram_used = round(torch.cuda.memory_allocated(0) / (1024 ** 3), 2)
-                vram_total = round(torch.cuda.get_device_properties(0).total_mem / (1024 ** 3), 2)
+                vram_total = round(total_vram / (1024 ** 3), 2)
                 utilization = round((vram_used / max(vram_total, 0.1)) * 100, 1)
             except Exception:
                 pass
@@ -113,7 +125,7 @@ class SystemTelemetry:
                 "zeroGpu": False,
                 "allocated": True,
                 "device": "Dedicated CUDA GPU",
-                "name": torch.cuda.get_device_name(0),
+                "name": getattr(gpu_props, 'name', torch.cuda.get_device_name(0)),
                 "vramUsedGB": vram_used,
                 "vramTotalGB": vram_total,
                 "utilization": utilization,
@@ -154,12 +166,14 @@ class SystemTelemetry:
         }
         if torch.cuda.is_available():
             props = torch.cuda.get_device_properties(0)
+            total_vram = _get_total_mem(props)
             info.update({
                 "device_count": torch.cuda.device_count(),
-                "gpu_name": props.name,
-                "vram_total_gb": round(props.total_mem / (1024**3), 2),
+                "gpu_name": getattr(props, 'name', torch.cuda.get_device_name(0)),
+                "vram_total_gb": round(total_vram / (1024**3), 2),
                 "vram_allocated_gb": round(torch.cuda.memory_allocated(0) / (1024**3), 2),
                 "vram_reserved_gb": round(torch.cuda.memory_reserved(0) / (1024**3), 2),
-                "compute_capability": f"{props.major}.{props.minor}",
+                "compute_capability": f"{getattr(props, 'major', 0)}.{getattr(props, 'minor', 0)}",
             })
         return info
+

@@ -123,6 +123,13 @@ def download_weights(url: str, dest: str):
 _WEIGHTS_CACHE: Dict[str, Dict[str, torch.Tensor]] = {}
 
 
+def _get_total_mem(props) -> int:
+    """Safely retrieves total VRAM across native PyTorch CUDA props and ZeroGPU SimpleNamespace wrappers."""
+    if props is None:
+        return 0
+    return int(getattr(props, 'total_memory', getattr(props, 'total_mem', 0)))
+
+
 def _log_gpu_diagnostics(context: str = ""):
     """Emit truthful GPU diagnostics to stderr."""
     prefix = f"[GPU] {context} " if context else "[GPU] "
@@ -133,8 +140,10 @@ def _log_gpu_diagnostics(context: str = ""):
             props = torch.cuda.get_device_properties(i)
             alloc = torch.cuda.memory_allocated(i)
             reserved = torch.cuda.memory_reserved(i)
-            print(f"{prefix}GPU {i}: {props.name}", file=sys.stderr, flush=True)
-            print(f"{prefix}  VRAM total:     {props.total_mem / (1024**3):.2f} GB", file=sys.stderr, flush=True)
+            gpu_name = getattr(props, 'name', torch.cuda.get_device_name(i))
+            total_vram = _get_total_mem(props)
+            print(f"{prefix}GPU {i}: {gpu_name}", file=sys.stderr, flush=True)
+            print(f"{prefix}  VRAM total:     {total_vram / (1024**3):.2f} GB", file=sys.stderr, flush=True)
             print(f"{prefix}  VRAM allocated: {alloc / (1024**3):.2f} GB", file=sys.stderr, flush=True)
             print(f"{prefix}  VRAM reserved:  {reserved / (1024**3):.2f} GB", file=sys.stderr, flush=True)
         print(f"{prefix}PyTorch CUDA version: {torch.version.cuda}", file=sys.stderr, flush=True)
@@ -143,6 +152,7 @@ def _log_gpu_diagnostics(context: str = ""):
     else:
         print(f"{prefix}WARNING: No CUDA GPU detected — running CPU fallback. "
               f"Performance will be significantly slower.", file=sys.stderr, flush=True)
+
 
 
 def get_adaptive_batch_size(h: int, w: int, device: torch.device) -> int:
@@ -320,8 +330,9 @@ class RealESRGANEngine(RestorationModel):
             "runtime_mode": get_runtime_mode(),
         }
         if torch.cuda.is_available():
-            info["gpu_name"] = torch.cuda.get_device_name(0)
-            info["vram_total_gb"] = round(torch.cuda.get_device_properties(0).total_mem / (1024**3), 2)
+            props = torch.cuda.get_device_properties(0)
+            info["gpu_name"] = getattr(props, 'name', torch.cuda.get_device_name(0))
+            info["vram_total_gb"] = round(_get_total_mem(props) / (1024**3), 2)
             info["vram_allocated_gb"] = round(torch.cuda.memory_allocated(0) / (1024**3), 2)
         return info
 

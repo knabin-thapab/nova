@@ -52,12 +52,14 @@ def benchmark_gpu_diagnostics():
     if torch.cuda.is_available():
         print_metric("Device Count", str(torch.cuda.device_count()))
         for i in range(torch.cuda.device_count()):
-            props = torch.cuda.get_device_properties(i)
-            print_metric(f"GPU {i}", props.name)
-            print_metric(f"  VRAM Total", f"{props.total_mem / (1024**3):.2f} GB")
+            total_vram = getattr(props, 'total_memory', getattr(props, 'total_mem', 0))
+            gpu_name = getattr(props, 'name', torch.cuda.get_device_name(i))
+            print_metric(f"GPU {i}", gpu_name)
+            print_metric(f"  VRAM Total", f"{total_vram / (1024**3):.2f} GB")
             print_metric(f"  VRAM Allocated", f"{torch.cuda.memory_allocated(i) / (1024**3):.2f} GB")
             print_metric(f"  VRAM Reserved", f"{torch.cuda.memory_reserved(i) / (1024**3):.2f} GB")
-            print_metric(f"  Compute Capability", f"{props.major}.{props.minor}")
+            print_metric(f"  Compute Capability", f"{getattr(props, 'major', 0)}.{getattr(props, 'minor', 0)}")
+
     else:
         print_metric("STATUS", "WARNING: No CUDA GPU — CPU-only mode")
 
