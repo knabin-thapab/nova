@@ -7,6 +7,23 @@ import {
   ModelsStatusReport,
 } from '../types';
 
+export function normalizeBackendUrl(rawUrl: string): string {
+  let url = rawUrl.trim().replace(/\/+$/, '');
+  if (!url) return '';
+
+  // Auto-convert Hugging Face Space UI URLs: https://huggingface.co/spaces/USER/SPACE -> https://USER-SPACE.hf.space
+  const hfMatch = url.match(/^https?:\/\/huggingface\.co\/spaces\/([^\/]+)\/([^\/]+)/i);
+  if (hfMatch) {
+    const user = hfMatch[1].toLowerCase().replace(/_/g, '-');
+    const space = hfMatch[2].toLowerCase().replace(/_/g, '-');
+    url = `https://${user}-${space}.hf.space`;
+  }
+
+  // Remove accidental trailing /api or /docs
+  url = url.replace(/\/api$/, '').replace(/\/docs$/, '').replace(/\/+$/, '');
+  return url;
+}
+
 // Auto-detect backend URL from ?backend= query parameter and save to localStorage
 function syncBackendFromUrl(): void {
   if (typeof window === 'undefined') return;
@@ -14,7 +31,7 @@ function syncBackendFromUrl(): void {
     const params = new URLSearchParams(window.location.search);
     const backendParam = params.get('backend');
     if (backendParam && backendParam.trim()) {
-      const cleanUrl = backendParam.trim().replace(/\/$/, '');
+      const cleanUrl = normalizeBackendUrl(backendParam);
       localStorage.setItem('nova_custom_backend_url', cleanUrl);
       params.delete('backend');
       const cleanSearch = params.toString();
@@ -28,10 +45,10 @@ syncBackendFromUrl();
 export function getBackendUrl(): string {
   const custom = typeof window !== 'undefined' ? localStorage.getItem('nova_custom_backend_url') : null;
   if (custom && custom.trim()) {
-    return custom.trim().replace(/\/$/, '');
+    return normalizeBackendUrl(custom);
   }
   return import.meta.env.VITE_API_URL
-    ? import.meta.env.VITE_API_URL.replace(/\/$/, '')
+    ? normalizeBackendUrl(import.meta.env.VITE_API_URL)
     : '';
 }
 
@@ -44,7 +61,7 @@ export function getShareableUrl(): string {
 export function setCustomBackendUrl(url: string | null) {
   if (typeof window !== 'undefined') {
     if (url && url.trim()) {
-      localStorage.setItem('nova_custom_backend_url', url.trim().replace(/\/$/, ''));
+      localStorage.setItem('nova_custom_backend_url', normalizeBackendUrl(url));
     } else {
       localStorage.removeItem('nova_custom_backend_url');
     }
@@ -115,7 +132,13 @@ export async function checkBackendHealth(): Promise<{ isOnline: boolean; error?:
       }
       return { isOnline: true, info: { status: 'online' } };
     }
-    if (res.status === 403 || res.status === 502 || res.status === 503) {
+    if (res.status === 403) {
+      return {
+        isOnline: false,
+        error: 'Hugging Face Space returned 403 Forbidden. Please verify: 1) Space visibility is set to "Public" in Space Settings (Private spaces block unauthenticated API requests), 2) Use the direct endpoint format https://username-spacename.hf.space.'
+      };
+    }
+    if (res.status === 502 || res.status === 503 || res.status === 504) {
       return { isOnline: false, error: 'Free AI Space is waking up. Please wait a few seconds and refresh.' };
     }
     return { isOnline: false, error: `Server responded with status ${res.status}` };

@@ -312,9 +312,12 @@ export const Header: React.FC<HeaderProps> = ({
                 type="url"
                 value={serverUrlInput}
                 onChange={(e) => setServerUrlInput(e.target.value)}
-                placeholder="https://giftaura-nova-ai-worker.hf.space"
+                placeholder="https://username-spacename.hf.space"
                 className="w-full px-4 py-3 rounded-xl bg-[#1a1f2e] border border-white/10 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/30 focus:outline-none text-sm font-mono text-slate-200 placeholder:text-slate-600 transition-colors"
               />
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                💡 <b>Hugging Face Spaces:</b> Use <code className="text-indigo-300 font-mono">https://username-spacename.hf.space</code>. Make sure Space visibility is <b>Public</b> in Space Settings (Private Spaces return 403 Forbidden).
+              </p>
             </div>
 
             {/* Action Buttons */}
