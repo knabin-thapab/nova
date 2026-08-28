@@ -76,10 +76,9 @@ try:
 
     print("[2/3] [OK] Gradio dashboard built successfully", flush=True)
 
-    print("[3/3] Mounting Gradio dashboard onto FastAPI root application...", flush=True)
-    # Correctly mount Gradio on the FastAPI root app so FastAPI handles CORS and /api routes
-    # without Gradio CSRF middleware returning 403 Forbidden on cross-origin requests
-    app = gr.mount_gradio_app(fastapi_app, demo, path="/")
+    print("[3/3] Mounting Gradio dashboard onto FastAPI root application at /gradio...", flush=True)
+    # Mount Gradio at /gradio so Gradio's catch-all route does NOT hijack /api/* or return 403 on API POST requests
+    app = gr.mount_gradio_app(fastapi_app, demo, path="/gradio")
     print("[3/3] [OK] Combined FastAPI + Gradio ASGI application ready", flush=True)
 
 except Exception as e:
@@ -91,7 +90,7 @@ except Exception as e:
 
     with gr.Blocks(title="NOVA Startup Diagnostic") as demo:
         gr.Markdown(f"# NOVA Startup Diagnostics\n```\n{traceback.format_exc()}\n```")
-    app = gr.mount_gradio_app(fastapi_app, demo, path="/")
+    app = gr.mount_gradio_app(fastapi_app, demo, path="/gradio")
 
 
 # Hugging Face Space & local entrypoint launcher
